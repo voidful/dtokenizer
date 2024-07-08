@@ -1,0 +1,9 @@
+Unidecode
+jiwer
+transformers>=4.25.1
+editdistance
+librosa
+webrtcvad
+pyctcdecode
+openai-whisper
+nlp2>=1.8.49
