@@ -7,60 +7,52 @@ import joblib
 import numpy as np
 import torch
 import torchaudio
+from sklearn.exceptions import InconsistentVersionWarning
 from torch import nn
-from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 from tqdm.contrib.concurrent import thread_map
 from transformers import Wav2Vec2FeatureExtractor, HubertModel
+from transformers import logging
 
-from dtokenizer.audio.model.hubert.configuration_hubert import hubert_layer6_code50, hubert_layer6_code100, \
-    hubert_layer6_code200, hubert_layer9_code500
+logging.set_verbosity_error()
+import warnings
+
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 from dtokenizer.audio.utility import collate_fn_pad, chunks
 from dtokenizer.audio.vocoder.hifigan import load_hifigan
-from dtokenizer.interface import BaseTokenizer
-
-CONFIG = {
-    "hubert_layer6_code50": hubert_layer6_code50,
-    "hubert_layer6_code100": hubert_layer6_code100,
-    "hubert_layer6_code200": hubert_layer6_code200,
-    "hubert_layer9_code500": hubert_layer9_code500
-}
 
 
-class HubertTokenizer(BaseTokenizer):
-    def __init__(self, config):
-        if config in CONFIG:
-            self.sc, self.cs = CONFIG[config]
+class SpeechDataset(Dataset):
+    def __init__(self, paths, input_values, processor, sampling_rate=16000):
+        self.paths = paths
+        self.input_values = input_values
+        self.processor = processor
+        self.sampling_rate = sampling_rate
+
+    def __getitem__(self, index):
+        if index < len(self.paths):
+            speech, sr = torchaudio.load(self.paths[index])
         else:
-            raise ValueError(f"config {config} not found in {CONFIG.keys()}")
+            speech = self.input_values[index - len(self.paths)][None, :]
+            sr = self.sampling_rate
 
-    def encode(self, speech):
-        return self.sc(input_values=speech)
-
-    def encode_file(self, input_file):
-        return self.sc(filepaths=input_file)
-
-    def decode(self, code):
-        if not self.cs:
-            raise ValueError("No hubert vocoder is available")
+        speech = speech.mean(0)
+        if sr != self.sampling_rate:
+            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sampling_rate)
+            speech = resampler.forward(speech.squeeze(0))
         else:
-            return self.cs(code)
+            speech = speech.squeeze(0)
+        input_values = self.processor(speech, return_tensors="pt",
+                                      sampling_rate=self.sampling_rate).input_values
+        return input_values.squeeze(0)
 
-    def batch_encode(self, speeches):
-        return speeches
-
-    def batch_decode(self, codes):
-        if not self.cs:
-            raise ValueError("No hubert vocoder is available")
-        audio_seqs = []
-        for code in codes:
-            audio_seqs.append(self.decode(code))
-        return audio_seqs
+    def __len__(self):
+        return len(self.paths) + len(self.input_values)
 
 
 class _Code2Speech(object):
-    def __init__(self, tts_checkpoint, model_cfg=None, waveglow_checkpint=None,
-                 max_decoder_steps=2000, end_tok=None, code_begin_pad=0):
+    def __init__(self, tts_checkpoint, model_cfg=None, end_tok=None, code_begin_pad=0):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.sample_rate = 16000
         self.hifigan = load_hifigan(model_path=tts_checkpoint, model_cfg=model_cfg)
@@ -76,24 +68,20 @@ class _Code2Speech(object):
             x = {
                 "code": tts_input.view(1, -1)
             }
-            # if self.hifigan.multispkr:
-            #     spk = (
-            #         random.randint(0, vocnum_speakers - 1)
-            #         if args.speaker_id == -1
-            #         else args.speaker_id
-            #     )
-            #     suffix = f"_spk{spk}"
-            #     x["spkr"] = torch.LongTensor([spk]).view(1, 1)
             audio_seq = self.hifigan(x, dur_prediction=dur_prediction)
 
             return audio_seq
+
+
+def dataloader_collate(batch):
+    return torch.cat(batch, dim=0), [b.shape[0] for b in batch]
 
 
 class _Speech2Code(object):
     def __init__(self, hubert_model, km_path, km_layer,
                  sampling_rate=16000,
                  chunk_sec=10,
-                 worker=8,
+                 worker=0,
                  return_diff=False,
                  batch=None):
         self.processor = Wav2Vec2FeatureExtractor.from_pretrained(hubert_model)
@@ -117,7 +105,6 @@ class _Speech2Code(object):
         self.max_batch = batch if batch else self.get_max_batch()
 
     def get_max_batch(self):
-        print("calculating max batch size...")
         batch = 1
         with torch.no_grad():
             try:
@@ -129,7 +116,6 @@ class _Speech2Code(object):
             except:
                 pass
         batch = max(int(batch * 0.95), 1)
-        print("maximum batch size will be", batch)
         return batch
 
     def _process_feature(self, k, top_k=100, feat_norm=False, beamsearch=False, beamsize=5):
@@ -194,40 +180,10 @@ class _Speech2Code(object):
                 input_values = [input_values]
 
             if len(filepaths) > 0:
-                class SpeechDataset(Dataset):
-                    def __init__(self, paths, input_values, processor, sampling_rate=16000):
-                        self.paths = paths
-                        self.input_values = input_values
-                        self.processor = processor
-                        self.sampling_rate = sampling_rate
-
-                    def __getitem__(self, index):
-                        if index < len(self.paths):
-                            speech, sr = torchaudio.load(self.paths[index])
-                        else:
-                            speech = self.input_values[index - len(self.paths)][None, :]
-                            sr = self.sampling_rate
-
-                        speech = speech.mean(0)
-                        if sr != self.sampling_rate:
-                            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sampling_rate)
-                            speech = resampler.forward(speech.squeeze(0))
-                        else:
-                            speech = speech.squeeze(0)
-                        input_values = self.processor(speech, return_tensors="pt",
-                                                      sampling_rate=self.sampling_rate).input_values
-                        return input_values.squeeze(0)
-
-                    def __len__(self):
-                        return len(self.paths) + len(self.input_values)
-
-                def dataloader_collate(batch):
-                    return torch.cat(batch, dim=0), [b.shape[0] for b in batch]
-
                 dataset = SpeechDataset(filepaths, input_values, self.processor, self.sampling_rate)
                 dataloader = DataLoader(dataset=dataset, batch_size=self.max_batch,
                                         shuffle=False,
-                                        num_workers=self.worker,
+                                        num_workers=0,
                                         collate_fn=dataloader_collate)
                 process_data_batches = iter(dataloader)
             else:

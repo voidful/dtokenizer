@@ -1,7 +1,33 @@
 import os
 import nlp2
 
-from dtokenizer.audio.model.hubert.modeling_hubert import _Code2Speech, _Speech2Code
+from dtokenizer.interface import BaseTokenizer
+from .modeling_hubert import _Speech2Code, _Code2Speech
+import torchaudio
+
+
+class HubertTokenizer(BaseTokenizer):
+    def __init__(self, config):
+        self.sampling_rate = 16000
+        if config in CONFIG:
+            self.sc, self.cs = CONFIG[config]()
+        else:
+            raise ValueError(f"config {config} not found in {CONFIG.keys()}")
+
+    def encode(self, speech, sampling_rate):
+        # if sampling_rate is not 16000
+        if sampling_rate != self.sampling_rate:
+            speech = torchaudio.functional.resample(speech, sampling_rate, self.sampling_rate)
+        return self.sc(input_values=speech), None
+
+    def encode_file(self, input_file):
+        return self.sc(filepaths=[input_file])['code'], None
+
+    def decode(self, code):
+        if not self.cs:
+            raise ValueError("No hubert vocoder is available")
+        else:
+            return self.cs(code)
 
 
 def hubert_layer6_code50(sampling_rate=16000,
@@ -11,7 +37,8 @@ def hubert_layer6_code50(sampling_rate=16000,
                          batch=None):
     nlp2.download_file(
         'https://dl.fbaipublicfiles.com/textless_nlp/gslm/hubert/km50/km.bin', './')
-    os.rename('./km.bin', './hubert_base_ls960_L6_km50.bin')
+    if not os.path.exists('./hubert_base_ls960_L6_km50.bin'):
+        os.rename('./km.bin', './hubert_base_ls960_L6_km50.bin')
     sc = _Speech2Code("facebook/hubert-base-ls960", './hubert_base_ls960_L6_km50.bin', 6,
                       sampling_rate=sampling_rate,
                       chunk_sec=chunk_sec,
@@ -43,7 +70,7 @@ def hubert_layer6_code100(sampling_rate=16000,
                       return_diff=return_diff,
                       batch=batch)
     cs = _Code2Speech(tts_checkpoint='./hifigan_hubert_layer6_code100_g_00500000',
-                      model_cfg=nlp2.read_json('./hifigan_hubert_layer6_code100_config.json'), vocoder='hifigan')
+                      model_cfg=nlp2.read_json('./hifigan_hubert_layer6_code100_config.json'))
     return sc, cs
 
 
@@ -78,3 +105,11 @@ def hubert_layer9_code500(sampling_rate=16000,
                       return_diff=return_diff,
                       batch=batch)
     return sc, None
+
+
+CONFIG = {
+    "hubert_layer6_code50": hubert_layer6_code50,
+    "hubert_layer6_code100": hubert_layer6_code100,
+    "hubert_layer6_code200": hubert_layer6_code200,
+    "hubert_layer9_code500": hubert_layer9_code500
+}
