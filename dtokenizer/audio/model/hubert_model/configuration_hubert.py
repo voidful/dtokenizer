@@ -107,9 +107,26 @@ def hubert_layer9_code500(sampling_rate=16000,
     return sc, None
 
 
+def zh_hubert_layer20_code2000(sampling_rate=16000,
+                               chunk_sec=10,
+                               worker=8,
+                               return_diff=False,
+                               batch=None):
+    nlp2.download_file(
+        'https://huggingface.co/anthony-wss/extract-ssl-bpe/resolve/main/km_2000.mdl', './')
+    sc = _Speech2Code("TencentGameMate/chinese-hubert-large", './km_2000.mdl', 20,
+                      sampling_rate=sampling_rate,
+                      chunk_sec=chunk_sec,
+                      worker=worker,
+                      return_diff=return_diff,
+                      batch=batch)
+    return sc, None
+
+
 CONFIG = {
     "hubert_layer6_code50": hubert_layer6_code50,
     "hubert_layer6_code100": hubert_layer6_code100,
     "hubert_layer6_code200": hubert_layer6_code200,
-    "hubert_layer9_code500": hubert_layer9_code500
+    "hubert_layer9_code500": hubert_layer9_code500,
+    "zh_hubert_layer20_code2000": zh_hubert_layer20_code2000,
 }
