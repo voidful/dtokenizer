@@ -2,13 +2,12 @@ import math
 import os
 import nlp2
 import torch
-from semanticodec.main import AUDIOMAE_PATCH_DURATION, SAMPLE_RATE, SEGMENT_DURATION, MEL_TARGET_LENGTH
-from semanticodec.utils import extract_kaldi_fbank_feature
-
 from dtokenizer.interface import BaseTokenizer
 
 try:
     from semanticodec import SemantiCodec
+    from semanticodec.main import AUDIOMAE_PATCH_DURATION, SAMPLE_RATE, SEGMENT_DURATION, MEL_TARGET_LENGTH
+    from semanticodec.utils import extract_kaldi_fbank_feature
 except ImportError:
     raise ImportError(
         "Please install semanticodec: pip install git+https://github.com/haoheliu/SemantiCodec-inference.git")

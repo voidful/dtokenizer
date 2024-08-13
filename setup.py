@@ -6,7 +6,7 @@ with open('requirements.txt') as f:
 
 setup(
     name='dtokenizer',
-    version='0.0.5',
+    version='0.0.6',
     description='',
     url='https://github.com/voidful/dtokenizer',
     author='Voidful',
